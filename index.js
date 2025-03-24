@@ -1,5 +1,5 @@
 const express = require('express');
-const { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL, SystemProgram } = require('@solana/web3.js');
 const { Token, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const bodyParser = require('body-parser');
 
@@ -24,7 +24,33 @@ app.post('/calculate-fee', (req, res) => {
   res.json({ totalFee });
 });
 
-// 2️⃣ API: Verify Payment
+// 2️⃣ API: Generate Payment Transaction
+app.post('/generate-payment', async (req, res) => {
+  const { userWallet, totalFee } = req.body;
+
+  try {
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: new PublicKey(userWallet),
+        toPubkey: DEV_WALLET,
+        lamports: totalFee * LAMPORTS_PER_SOL,
+      })
+    );
+
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = new PublicKey(userWallet);
+
+    const serializedTx = transaction.serialize({ requireAllSignatures: false }).toString('base64');
+
+    res.json({ transaction: serializedTx });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate payment transaction.' });
+  }
+});
+
+// 3️⃣ API: Verify Payment
 app.post('/verify-payment', async (req, res) => {
   const { userWallet, expectedFee } = req.body;
   const signatures = await connection.getSignaturesForAddress(DEV_WALLET, { limit: 50 });
@@ -41,7 +67,7 @@ app.post('/verify-payment', async (req, res) => {
   res.json({ paid: false });
 });
 
-// 3️⃣ API: Create Token
+// 4️⃣ API: Create Token
 app.post('/create-token', async (req, res) => {
   const { payerSecret, name, symbol, decimals, supply, options, metadataURI } = req.body;
 
@@ -72,8 +98,7 @@ app.post('/create-token', async (req, res) => {
       await mint.setAuthority(mint.publicKey, null, 'FreezeAccount', payer.publicKey, []);
     }
 
-    // Attach Metadata (Placeholder: Assume metadataURI uploaded externally)
-    // Metaplex instructions will go here (can integrate metaboss CLI or use metaplex SDK)
+    // Attach Metadata (Placeholder)
 
     res.json({
       mint: mint.publicKey.toBase58(),
