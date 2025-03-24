@@ -67,11 +67,35 @@ app.post('/verify-payment', async (req, res) => {
   res.json({ paid: false });
 });
 
-// 4️⃣ API: Create Token
+// 4️⃣ API: Create Token (WITH PAYMENT VERIFICATION!)
 app.post('/create-token', async (req, res) => {
-  const { payerSecret, name, symbol, decimals, supply, options, metadataURI } = req.body;
+  const { payerSecret, name, symbol, decimals, supply, options, metadataURI, userWallet, paymentSignature, expectedFee } = req.body;
 
   try {
+    // 🔐 STEP 1: Verify Payment Transaction
+    const txn = await connection.getTransaction(paymentSignature, { commitment: "confirmed" });
+    if (!txn || !txn.meta) {
+      return res.status(400).json({ error: "Invalid payment transaction." });
+    }
+
+    // Extract sender, receiver, amount
+    const sender = txn.transaction.message.accountKeys[0].toBase58();
+    const receiver = txn.transaction.message.accountKeys[1].toBase58();
+    const lamports = txn.meta.preBalances[0] - txn.meta.postBalances[0];
+
+    // Check conditions
+    if (sender !== userWallet) {
+      return res.status(400).json({ error: "Payment sender does not match wallet." });
+    }
+    if (receiver !== DEV_WALLET.toBase58()) {
+      return res.status(400).json({ error: "Payment receiver does not match dev wallet." });
+    }
+    if (lamports < expectedFee * LAMPORTS_PER_SOL) {
+      return res.status(400).json({ error: "Incorrect payment amount." });
+    }
+
+    // ✅ Payment verified → Proceed to mint token
+
     const payer = Keypair.fromSecretKey(Uint8Array.from(payerSecret));
 
     // Create Mint
@@ -98,13 +122,14 @@ app.post('/create-token', async (req, res) => {
       await mint.setAuthority(mint.publicKey, null, 'FreezeAccount', payer.publicKey, []);
     }
 
-    // Attach Metadata (Placeholder)
+    // Attach Metadata (Optional – Placeholder)
 
     res.json({
       mint: mint.publicKey.toBase58(),
       tokenAccount: tokenAccount.address.toBase58(),
       message: 'Token created successfully!'
     });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Token creation failed.' });
