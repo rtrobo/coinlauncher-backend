@@ -1,19 +1,28 @@
 const express = require('express');
-const { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL, SystemProgram } = require('@solana/web3.js');
-const { Token, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const {
+  Connection,
+  PublicKey,
+  Keypair,
+  Transaction,
+  LAMPORTS_PER_SOL,
+  SystemProgram,
+} = require('@solana/web3.js');
+const { createMint, getOrCreateAssociatedTokenAccount, mintTo, setAuthority } = require('@solana/spl-token');
+const { createCreateMetadataAccountV3Instruction } = require('@metaplex-foundation/mpl-token-metadata');
+const { getPayer } = require('./payer'); // Optional: for dev wallet fallback
+const bs58 = require('bs58');
 const bodyParser = require('body-parser');
 
 const app = express();
 app.use(bodyParser.json());
 
-// CONFIGURABLE VARIABLES
 const SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+const connection = new Connection(SOLANA_RPC);
 const DEV_WALLET = new PublicKey('86tXdBQuoD2cR9SXJMJSZLsZotkLUFqT7kZkwd9nLChm');
 const BASE_FEE_SOL = 0.08;
 const EXTRA_OPTION_FEE_SOL = 0.03;
-const connection = new Connection(SOLANA_RPC);
 
-// 1️⃣ API: Calculate Fees
+// 1️⃣ Calculate Total Fee
 app.post('/calculate-fee', (req, res) => {
   const { revokeMint, revokeFreeze, revokeMetadata, customMetadata } = req.body;
   let totalFee = BASE_FEE_SOL;
@@ -24,10 +33,9 @@ app.post('/calculate-fee', (req, res) => {
   res.json({ totalFee });
 });
 
-// 2️⃣ API: Generate Payment Transaction
+// 2️⃣ Generate Payment Transaction
 app.post('/generate-payment', async (req, res) => {
   const { userWallet, totalFee } = req.body;
-
   try {
     const transaction = new Transaction().add(
       SystemProgram.transfer({
@@ -36,13 +44,10 @@ app.post('/generate-payment', async (req, res) => {
         lamports: totalFee * LAMPORTS_PER_SOL,
       })
     );
-
     const { blockhash } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = new PublicKey(userWallet);
-
     const serializedTx = transaction.serialize({ requireAllSignatures: false }).toString('base64');
-
     res.json({ transaction: serializedTx });
   } catch (err) {
     console.error(err);
@@ -50,7 +55,7 @@ app.post('/generate-payment', async (req, res) => {
   }
 });
 
-// 3️⃣ API: Verify Payment
+// 3️⃣ Verify Payment
 app.post('/verify-payment', async (req, res) => {
   const { userWallet, expectedFee } = req.body;
   const signatures = await connection.getSignaturesForAddress(DEV_WALLET, { limit: 50 });
@@ -67,69 +72,69 @@ app.post('/verify-payment', async (req, res) => {
   res.json({ paid: false });
 });
 
-// 4️⃣ API: Create Token (WITH PAYMENT VERIFICATION!)
+// 4️⃣ Create Token with Default or Custom Metadata
 app.post('/create-token', async (req, res) => {
-  const { payerSecret, name, symbol, decimals, supply, options, metadataURI, userWallet, paymentSignature, expectedFee } = req.body;
+  const {
+    name,
+    symbol,
+    decimals,
+    supply,
+    options,
+    metadataURI,
+    userWallet,
+    paymentSignature,
+    expectedFee,
+  } = req.body;
 
   try {
-    // 🔐 STEP 1: Verify Payment Transaction
-    const txn = await connection.getTransaction(paymentSignature, { commitment: "confirmed" });
-    if (!txn || !txn.meta) {
-      return res.status(400).json({ error: "Invalid payment transaction." });
-    }
+    const txn = await connection.getTransaction(paymentSignature, { commitment: 'confirmed' });
+    if (!txn || !txn.meta) return res.status(400).json({ error: 'Invalid payment transaction.' });
 
-    // Extract sender, receiver, amount
     const sender = txn.transaction.message.accountKeys[0].toBase58();
     const receiver = txn.transaction.message.accountKeys[1].toBase58();
     const lamports = txn.meta.preBalances[0] - txn.meta.postBalances[0];
 
-    // Check conditions
-    if (sender !== userWallet) {
-      return res.status(400).json({ error: "Payment sender does not match wallet." });
-    }
-    if (receiver !== DEV_WALLET.toBase58()) {
-      return res.status(400).json({ error: "Payment receiver does not match dev wallet." });
-    }
-    if (lamports < expectedFee * LAMPORTS_PER_SOL) {
-      return res.status(400).json({ error: "Incorrect payment amount." });
-    }
+    if (sender !== userWallet)
+      return res.status(400).json({ error: 'Payment sender does not match wallet.' });
+    if (receiver !== DEV_WALLET.toBase58())
+      return res.status(400).json({ error: 'Payment receiver does not match dev wallet.' });
+    if (lamports < expectedFee * LAMPORTS_PER_SOL)
+      return res.status(400).json({ error: 'Incorrect payment amount.' });
 
-    // ✅ Payment verified → Proceed to mint token
-
-    const payer = Keypair.fromSecretKey(Uint8Array.from(payerSecret));
+    const payer = Keypair.generate(); // Temporary payer for tx build only
 
     // Create Mint
-    const mint = await Token.createMint(
-      connection,
-      payer,
-      payer.publicKey,
-      payer.publicKey,
-      decimals,
-      TOKEN_PROGRAM_ID
-    );
+    const mint = await createMint(connection, payer, payer.publicKey, null, decimals);
+    const tokenAccount = await getOrCreateAssociatedTokenAccount(connection, payer, mint, payer.publicKey);
+    await mintTo(connection, payer, mint, tokenAccount.address, payer, supply);
 
-    // Create Token Account
-    const tokenAccount = await mint.getOrCreateAssociatedAccountInfo(payer.publicKey);
+    if (options.revokeMint)
+      await setAuthority(connection, payer, mint, payer.publicKey, 'MintTokens', null);
+    if (options.revokeFreeze)
+      await setAuthority(connection, payer, mint, payer.publicKey, 'FreezeAccount', null);
 
-    // Mint Tokens
-    await mint.mintTo(tokenAccount.address, payer.publicKey, [], supply);
+    // Metaplex Metadata
+    const defaultName = 'CoinLauncher';
+    const defaultUri = 'https://coinlauncher.site';
+    const creatorName = metadataURI?.creatorName || defaultName;
+    const creatorSite = metadataURI?.creatorWebsite || defaultUri;
 
-    // Revoke Authorities if toggled
-    if (options.revokeMint) {
-      await mint.setAuthority(mint.publicKey, null, 'MintTokens', payer.publicKey, []);
-    }
-    if (options.revokeFreeze) {
-      await mint.setAuthority(mint.publicKey, null, 'FreezeAccount', payer.publicKey, []);
-    }
+    const metadata = {
+      name: creatorName,
+      symbol: symbol,
+      uri: creatorSite,
+      sellerFeeBasisPoints: 0,
+      creators: [{ address: DEV_WALLET, verified: true, share: 100 }],
+    };
 
-    // Attach Metadata (Optional – Placeholder)
+    // You would insert logic here to attach Metaplex metadata
+    // (this section can be expanded based on your token standard)
 
     res.json({
-      mint: mint.publicKey.toBase58(),
+      mint: mint.toBase58(),
       tokenAccount: tokenAccount.address.toBase58(),
-      message: 'Token created successfully!'
+      message: 'Token created successfully!',
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Token creation failed.' });
