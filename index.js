@@ -40,7 +40,6 @@ app.use(cors({
   methods: ["GET", "POST"],
 }));
 
-
 app.use(express.json());
 
 // === 🌐 Solana Setup ===
@@ -77,7 +76,7 @@ app.post("/generate-payment", async (req, res) => {
       toPubkey: DEV_WALLET,
       lamports: totalFee * LAMPORTS_PER_SOL,
     });
-    res.json({ instruction: instruction });
+    res.json({ instruction });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to generate payment instruction." });
