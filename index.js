@@ -21,10 +21,10 @@ const {
 
 const app = express();
 app.use(cors({
-  origin: "https://your-frontend-url.vercel.app", // 👈 replace with actual frontend URL
+  origin: "https://v0-solana-token-frontend.vercel.app/", // 👈 replace with actual frontend URL
   methods: ["GET", "POST"],
 }));
-app.use(bodyParser.json());
+app.use(express.json());
 
 // 📡 Solana setup
 const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
