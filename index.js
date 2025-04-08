@@ -1,3 +1,4 @@
+// === 🔧 Required Modules ===
 const express = require("express");
 const fs = require("fs");
 const cors = require("cors");
@@ -19,6 +20,7 @@ const {
   getAssociatedTokenAddress,
 } = require("@solana/spl-token");
 
+// === 🚀 App Initialization ===
 const app = express();
 app.use(cors({
   origin: (origin, callback) => {
@@ -32,22 +34,21 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// 📡 Solana setup
+// === 🌐 Solana Setup ===
 const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
 const connection = new Connection(SOLANA_RPC);
 const DEV_WALLET = new PublicKey("HLHZPThtJYe7CgzkauGbtr8xVNe9GR8G4LDgmEEbWUgi");
 const BASE_FEE_SOL = 0.08;
 const EXTRA_OPTION_FEE_SOL = 0.03;
 
-// 🔐 Load payer keypair from environment variable
+// === 🔐 Load Payer Keypair ===
 const payerJson = process.env.PAYER_JSON;
 if (!payerJson) {
   throw new Error("Missing PAYER_JSON environment variable");
 }
 const payer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(payerJson)));
 
-
-// 🧮 1. Calculate total fee
+// === 🧮 1. Calculate Total Fee ===
 app.post("/calculate-fee", (req, res) => {
   const { revokeMint, revokeFreeze, revokeMetadata, customMetadata } = req.body;
   let totalFee = BASE_FEE_SOL;
@@ -58,10 +59,9 @@ app.post("/calculate-fee", (req, res) => {
   res.json({ totalFee });
 });
 
-// 💰 2. Generate payment transaction
+// === 💰 2. Generate Payment Transaction ===
 app.post("/generate-payment", async (req, res) => {
   const { userWallet, totalFee } = req.body;
-
   try {
     const transaction = new Transaction().add(
       SystemProgram.transfer({
@@ -70,15 +70,12 @@ app.post("/generate-payment", async (req, res) => {
         lamports: totalFee * LAMPORTS_PER_SOL,
       })
     );
-
     const { blockhash } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = new PublicKey(userWallet);
-
     const serializedTx = transaction.serialize({
       requireAllSignatures: false,
     }).toString("base64");
-
     res.json({ transaction: serializedTx });
   } catch (err) {
     console.error(err);
@@ -86,7 +83,7 @@ app.post("/generate-payment", async (req, res) => {
   }
 });
 
-// ✅ 3. Verify payment
+// === ✅ 3. Verify Payment ===
 app.post("/verify-payment", async (req, res) => {
   const { userWallet, expectedFee } = req.body;
   const signatures = await connection.getSignaturesForAddress(DEV_WALLET, {
@@ -112,7 +109,7 @@ app.post("/verify-payment", async (req, res) => {
   res.json({ paid: false });
 });
 
-// 🪙 4. Create token
+// === 🪙 4. Create Token ===
 app.post("/create-token", async (req, res) => {
   const {
     name,
@@ -127,18 +124,23 @@ app.post("/create-token", async (req, res) => {
   } = req.body;
 
   try {
-    // ✅ Verify payment
+    console.log("🔍 Verifying payment transaction...");
     const txn = await connection.getTransaction(paymentSignature, {
       commitment: "confirmed",
     });
 
     if (!txn || !txn.meta) {
+      console.log("❌ Invalid payment transaction");
       return res.status(400).json({ error: "Invalid payment transaction." });
     }
 
     const sender = txn.transaction.message.accountKeys[0].toBase58();
     const receiver = txn.transaction.message.accountKeys[1].toBase58();
     const lamports = txn.meta.preBalances[0] - txn.meta.postBalances[0];
+
+    console.log(`🔑 Sender: ${sender}`);
+    console.log(`🎯 Receiver: ${receiver}`);
+    console.log(`💸 Lamports sent: ${lamports}`);
 
     if (sender !== userWallet)
       return res.status(400).json({ error: "Payment sender does not match wallet." });
@@ -149,7 +151,8 @@ app.post("/create-token", async (req, res) => {
     if (lamports < expectedFee * LAMPORTS_PER_SOL)
       return res.status(400).json({ error: "Incorrect payment amount." });
 
-    // 🧱 Create token mint
+    console.log("✅ Payment verified, creating mint...");
+
     const mint = await Token.createMint(
       connection,
       payer,
@@ -158,14 +161,14 @@ app.post("/create-token", async (req, res) => {
       decimals,
       TOKEN_PROGRAM_ID
     );
+    console.log("✅ Token mint created:", mint.publicKey.toBase58());
 
-    // 🧾 Create associated token account
     const tokenAccount = await mint.getOrCreateAssociatedAccountInfo(payer.publicKey);
+    console.log("📦 Associated token account created:", tokenAccount.address.toBase58());
 
-    // 🪙 Mint tokens
     await mint.mintTo(tokenAccount.address, payer.publicKey, [], supply);
+    console.log(`✅ Minted ${supply} tokens`);
 
-    // 🚫 Revoke authorities
     if (options.revokeMint) {
       await mint.setAuthority(
         mint.publicKey,
@@ -174,6 +177,7 @@ app.post("/create-token", async (req, res) => {
         payer.publicKey,
         []
       );
+      console.log("🚫 Mint authority revoked");
     }
     if (options.revokeFreeze) {
       await mint.setAuthority(
@@ -183,9 +187,9 @@ app.post("/create-token", async (req, res) => {
         payer.publicKey,
         []
       );
+      console.log("🚫 Freeze authority revoked");
     }
 
-    // 🏷️ Attach metadata (default or custom)
     const metadataPDA = (
       await PublicKey.findProgramAddressSync(
         [
@@ -200,7 +204,7 @@ app.post("/create-token", async (req, res) => {
     const metadataData = {
       name,
       symbol,
-      uri: "https://coinlauncher.site/metadata.json",
+      uri: metadataURI?.creatorWebsite || "https://coinlauncher.site/metadata.json",
       sellerFeeBasisPoints: 0,
       creators: [
         {
@@ -209,16 +213,6 @@ app.post("/create-token", async (req, res) => {
           share: 100,
         },
       ],
-      ...(metadataURI && {
-        uri: metadataURI.creatorWebsite || "https://coinlauncher.site/metadata.json",
-        creators: [
-          {
-            address: payer.publicKey,
-            verified: true,
-            share: 100,
-          },
-        ],
-      }),
     };
 
     const metadataInstruction = createCreateMetadataAccountV3Instruction(
@@ -240,19 +234,20 @@ app.post("/create-token", async (req, res) => {
 
     const metadataTx = new Transaction().add(metadataInstruction);
     await connection.sendTransaction(metadataTx, [payer]);
+    console.log("🏷 Metadata attached");
 
-    // ✅ Done
     res.json({
       mint: mint.publicKey.toBase58(),
       tokenAccount: tokenAccount.address.toBase58(),
       message: "Token created successfully!",
     });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Token creation failed:", err);
     res.status(500).json({ error: "Token creation failed." });
   }
 });
 
+// === 🚪 Start Server ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
   console.log(`🚀 Token Creator backend running on port ${PORT}`)
