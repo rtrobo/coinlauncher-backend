@@ -35,7 +35,7 @@ app.use(express.json());
 // 📡 Solana setup
 const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
 const connection = new Connection(SOLANA_RPC);
-const DEV_WALLET = new PublicKey("86tXdBQuoD2cR9SXJMJSZLsZotkLUFqT7kZkwd9nLChm");
+const DEV_WALLET = new PublicKey("HLHZPThtJYe7CgzkauGbtr8xVNe9GR8G4LDgmEEbWUgi");
 const BASE_FEE_SOL = 0.08;
 const EXTRA_OPTION_FEE_SOL = 0.03;
 
