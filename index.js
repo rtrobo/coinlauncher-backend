@@ -23,14 +23,20 @@ const {
 // === 🚀 App Initialization ===
 const app = express();
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || origin.endsWith(".vercel.app")) {
+  origin: function (origin, callback) {
+    const allowed = [
+      undefined, // allow server-to-server or curl
+      "http://localhost:3000", // local dev
+      "https://v0-solana-token-frontend.vercel.app",
+      "https://v0-solana-token-frontend-xdmldk.vercel.app"
+    ];
+    if (allowed.includes(origin) || origin?.endsWith(".vercel.app")) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));
     }
   },
-  methods: ["GET", "POST"]
+  methods: ["GET", "POST"],
 }));
 app.use(express.json());
 
