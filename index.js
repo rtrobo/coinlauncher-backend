@@ -133,11 +133,13 @@ app.post("/create-token", async (req, res) => {
   } = req.body;
 
   try {
-    console.log("⚙️  /create-token called");
-    console.log("⏳ Waiting 3 seconds before verifying transaction...");
-    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for Solana to finalize tx
+    console.log("⚙️ /create-token called with paymentSignature:", paymentSignature);
 
-    console.log("🔍 Fetching transaction...");
+    // Wait for payment to finalize
+    console.log("⏳ Waiting 5 seconds before verifying transaction...");
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    console.log("🔍 Verifying payment...");
     const txn = await connection.getTransaction(paymentSignature, {
       commitment: "confirmed",
     });
