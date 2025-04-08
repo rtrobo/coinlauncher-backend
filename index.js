@@ -1,5 +1,6 @@
 const express = require("express");
 const fs = require("fs");
+const cors = require("cors");
 const bodyParser = require("body-parser");
 const {
   Connection,
@@ -19,6 +20,10 @@ const {
 } = require("@solana/spl-token");
 
 const app = express();
+app.use(cors({
+  origin: "https://your-frontend-url.vercel.app", // 👈 replace with actual frontend URL
+  methods: ["GET", "POST"],
+}));
 app.use(bodyParser.json());
 
 // 📡 Solana setup
