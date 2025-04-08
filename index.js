@@ -72,23 +72,15 @@ app.post("/calculate-fee", (req, res) => {
 app.post("/generate-payment", async (req, res) => {
   const { userWallet, totalFee } = req.body;
   try {
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: new PublicKey(userWallet),
-        toPubkey: DEV_WALLET,
-        lamports: totalFee * LAMPORTS_PER_SOL,
-      })
-    );
-    const { blockhash } = await connection.getLatestBlockhash();
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = new PublicKey(userWallet);
-    const serializedTx = transaction.serialize({
-      requireAllSignatures: false,
-    }).toString("base64");
-    res.json({ transaction: serializedTx });
+    const instruction = SystemProgram.transfer({
+      fromPubkey: new PublicKey(userWallet),
+      toPubkey: DEV_WALLET,
+      lamports: totalFee * LAMPORTS_PER_SOL,
+    });
+    res.json({ instruction: instruction });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to generate payment transaction." });
+    res.status(500).json({ error: "Failed to generate payment instruction." });
   }
 });
 
