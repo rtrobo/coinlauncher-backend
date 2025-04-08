@@ -240,23 +240,35 @@ app.post("/create-token", async (req, res) => {
     );
 
 const metadataTx = new Transaction().add(metadataInstruction);
-console.log("📤 Sending and confirming metadata transaction...");
 
-const sig = await sendAndConfirmTransaction(
-  connection,
-  metadataTx,
-  [payer],
-  { commitment: "confirmed" }
+// 📦 Set recent blockhash and fee payer
+const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+metadataTx.recentBlockhash = blockhash;
+metadataTx.feePayer = payer.publicKey;
+
+// 🚀 Send transaction
+const sig = await connection.sendTransaction(metadataTx, [payer]);
+console.log("📤 Metadata transaction sent:", sig);
+console.log("⏳ Waiting for confirmation...");
+
+// ⏳ Confirm with blockhash + height to avoid expiry
+await connection.confirmTransaction(
+  {
+    signature: sig,
+    blockhash,
+    lastValidBlockHeight,
+  },
+  "confirmed"
 );
 
 console.log("✅ Metadata confirmed with signature:", sig);
 
+res.json({
+  mint: mint.publicKey.toBase58(),
+  tokenAccount: tokenAccount.address.toBase58(),
+  message: "Token created successfully!",
+});
 
-    res.json({
-      mint: mint.publicKey.toBase58(),
-      tokenAccount: tokenAccount.address.toBase58(),
-      message: "Token created successfully!",
-    });
   } catch (err) {
     console.error("❌ Token creation failed:", err);
     res.status(500).json({ error: "Token creation failed." });
