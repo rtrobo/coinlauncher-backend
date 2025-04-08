@@ -10,6 +10,7 @@ const {
   Transaction,
   LAMPORTS_PER_SOL,
   SystemProgram,
+  sendAndConfirmTransaction
 } = require("@solana/web3.js");
 const { Token, TOKEN_PROGRAM_ID } = require("@solana/spl-token");
 const {
@@ -239,9 +240,15 @@ app.post("/create-token", async (req, res) => {
     );
 
 const metadataTx = new Transaction().add(metadataInstruction);
-const sig = await connection.sendTransaction(metadataTx, [payer]);
-console.log("📤 Metadata transaction sent, awaiting confirmation...");
-await connection.confirmTransaction(sig, "confirmed");
+console.log("📤 Sending and confirming metadata transaction...");
+
+const sig = await sendAndConfirmTransaction(
+  connection,
+  metadataTx,
+  [payer],
+  { commitment: "confirmed" }
+);
+
 console.log("✅ Metadata confirmed with signature:", sig);
 
 
