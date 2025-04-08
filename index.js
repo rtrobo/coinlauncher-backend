@@ -28,10 +28,13 @@ const DEV_WALLET = new PublicKey("86tXdBQuoD2cR9SXJMJSZLsZotkLUFqT7kZkwd9nLChm")
 const BASE_FEE_SOL = 0.08;
 const EXTRA_OPTION_FEE_SOL = 0.03;
 
-// 🔐 Load payer keypair
-const payer = Keypair.fromSecretKey(
-  Uint8Array.from(JSON.parse(fs.readFileSync("./payer.json")))
-);
+// 🔐 Load payer keypair from environment variable
+const payerJson = process.env.PAYER_JSON;
+if (!payerJson) {
+  throw new Error("Missing PAYER_JSON environment variable");
+}
+const payer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(payerJson)));
+
 
 // 🧮 1. Calculate total fee
 app.post("/calculate-fee", (req, res) => {
