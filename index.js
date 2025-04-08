@@ -31,9 +31,11 @@ app.use(cors({
       "https://v0-solana-token-frontend.vercel.app",
       "https://v0-solana-token-frontend-xdmldk.vercel.app"
     ];
+    console.log("Incoming request origin:", origin); // Log the origin for debugging
     if (!origin || allowed.includes(origin) || origin.endsWith(".vercel.app")) {
       callback(null, true);
     } else {
+      console.log("CORS rejected origin:", origin);
       callback(new Error("Not allowed by CORS"));
     }
   },
