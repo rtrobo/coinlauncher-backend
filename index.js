@@ -25,14 +25,21 @@ const {
 const app = express();
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || origin.includes("vercel.app") || origin === "http://localhost:3000") {
+    const allowed = [
+      undefined, // server-to-server or curl
+      "http://localhost:3000", // local dev
+      "https://v0-solana-token-frontend.vercel.app",
+      "https://v0-solana-token-frontend-xdmldk.vercel.app"
+    ];
+    if (!origin || allowed.includes(origin) || origin.endsWith(".vercel.app")) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));
     }
   },
-  methods: ["GET", "POST"]
+  methods: ["GET", "POST"],
 }));
+
 
 app.use(express.json());
 
@@ -239,24 +246,24 @@ app.post("/create-token", async (req, res) => {
       }
     );
 
+// 🧾 Build transaction with metadata instruction
 const metadataTx = new Transaction().add(metadataInstruction);
 
-// 📦 Set recent blockhash and fee payer
-const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-metadataTx.recentBlockhash = blockhash;
+// 📦 Get fresh blockhash just before sending
+const latest = await connection.getLatestBlockhash("confirmed");
+metadataTx.recentBlockhash = latest.blockhash;
 metadataTx.feePayer = payer.publicKey;
 
-// 🚀 Send transaction
+// 🚀 Send metadata transaction
 const sig = await connection.sendTransaction(metadataTx, [payer]);
 console.log("📤 Metadata transaction sent:", sig);
-console.log("⏳ Waiting for confirmation...");
 
-// ⏳ Confirm with blockhash + height to avoid expiry
+// ⏳ Wait for confirmation using last valid block height
 await connection.confirmTransaction(
   {
     signature: sig,
-    blockhash,
-    lastValidBlockHeight,
+    blockhash: latest.blockhash,
+    lastValidBlockHeight: latest.lastValidBlockHeight,
   },
   "confirmed"
 );
