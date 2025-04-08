@@ -19,6 +19,7 @@ const {
   getAssociatedTokenAddress,
 } = require("@solana/spl-token");
 
+const app = express();
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || origin.endsWith(".vercel.app")) {
