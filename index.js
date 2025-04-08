@@ -124,13 +124,17 @@ app.post("/create-token", async (req, res) => {
   } = req.body;
 
   try {
-    console.log("🔍 Verifying payment transaction...");
+    console.log("⚙️  /create-token called");
+    console.log("⏳ Waiting 3 seconds before verifying transaction...");
+    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for Solana to finalize tx
+
+    console.log("🔍 Fetching transaction...");
     const txn = await connection.getTransaction(paymentSignature, {
       commitment: "confirmed",
     });
 
     if (!txn || !txn.meta) {
-      console.log("❌ Invalid payment transaction");
+      console.log("❌ Invalid or unconfirmed transaction:", txn);
       return res.status(400).json({ error: "Invalid payment transaction." });
     }
 
@@ -151,7 +155,7 @@ app.post("/create-token", async (req, res) => {
     if (lamports < expectedFee * LAMPORTS_PER_SOL)
       return res.status(400).json({ error: "Incorrect payment amount." });
 
-    console.log("✅ Payment verified, creating mint...");
+    console.log("✅ Payment verified. Creating token...");
 
     const mint = await Token.createMint(
       connection,
@@ -164,7 +168,7 @@ app.post("/create-token", async (req, res) => {
     console.log("✅ Token mint created:", mint.publicKey.toBase58());
 
     const tokenAccount = await mint.getOrCreateAssociatedAccountInfo(payer.publicKey);
-    console.log("📦 Associated token account created:", tokenAccount.address.toBase58());
+    console.log("📦 Token account:", tokenAccount.address.toBase58());
 
     await mint.mintTo(tokenAccount.address, payer.publicKey, [], supply);
     console.log(`✅ Minted ${supply} tokens`);
@@ -179,6 +183,7 @@ app.post("/create-token", async (req, res) => {
       );
       console.log("🚫 Mint authority revoked");
     }
+
     if (options.revokeFreeze) {
       await mint.setAuthority(
         mint.publicKey,
@@ -246,6 +251,7 @@ app.post("/create-token", async (req, res) => {
     res.status(500).json({ error: "Token creation failed." });
   }
 });
+
 
 // === 🚪 Start Server ===
 const PORT = process.env.PORT || 3000;
