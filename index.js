@@ -157,17 +157,25 @@ app.post("/create-token", async (req, res) => {
     console.log(`🎯 Receiver: ${receiver}`);
     console.log(`💸 Lamports sent: ${lamports}`);
 
-    if (sender !== userWallet)
+    if (sender !== userWallet) {
+      console.log("❌ Sender mismatch");
       return res.status(400).json({ error: "Payment sender does not match wallet." });
+    }
 
-    if (receiver !== DEV_WALLET.toBase58())
+    if (receiver !== DEV_WALLET.toBase58()) {
+      console.log("❌ Receiver mismatch");
       return res.status(400).json({ error: "Payment receiver mismatch." });
+    }
 
-    if (lamports < expectedFee * LAMPORTS_PER_SOL)
+    if (lamports < expectedFee * LAMPORTS_PER_SOL) {
+      console.log("❌ Insufficient payment");
       return res.status(400).json({ error: "Incorrect payment amount." });
+    }
 
-    console.log("✅ Payment verified. Creating token...");
+    console.log("✅ Payment verified. Proceeding to create token...");
 
+    // Step 1: Create the token mint
+    console.log("🏭 Creating token mint...");
     const mint = await Token.createMint(
       connection,
       payer,
@@ -178,13 +186,18 @@ app.post("/create-token", async (req, res) => {
     );
     console.log("✅ Token mint created:", mint.publicKey.toBase58());
 
+    // Step 2: Create token account and mint tokens
+    console.log("📦 Creating token account...");
     const tokenAccount = await mint.getOrCreateAssociatedAccountInfo(payer.publicKey);
-    console.log("📦 Token account:", tokenAccount.address.toBase58());
+    console.log("✅ Token account created:", tokenAccount.address.toBase58());
 
+    console.log("💰 Minting tokens...");
     await mint.mintTo(tokenAccount.address, payer.publicKey, [], supply);
     console.log(`✅ Minted ${supply} tokens`);
 
+    // Step 3: Revoke authorities if requested
     if (options.revokeMint) {
+      console.log("🚫 Revoking mint authority...");
       await mint.setAuthority(
         mint.publicKey,
         null,
@@ -192,10 +205,11 @@ app.post("/create-token", async (req, res) => {
         payer.publicKey,
         []
       );
-      console.log("🚫 Mint authority revoked");
+      console.log("✅ Mint authority revoked");
     }
 
     if (options.revokeFreeze) {
+      console.log("🚫 Revoking freeze authority...");
       await mint.setAuthority(
         mint.publicKey,
         null,
@@ -203,9 +217,11 @@ app.post("/create-token", async (req, res) => {
         payer.publicKey,
         []
       );
-      console.log("🚫 Freeze authority revoked");
+      console.log("✅ Freeze authority revoked");
     }
 
+    // Step 4: Set up metadata
+    console.log("📝 Setting up metadata...");
     const metadataPDA = (
       await PublicKey.findProgramAddressSync(
         [
@@ -248,42 +264,37 @@ app.post("/create-token", async (req, res) => {
       }
     );
 
-// 🧾 Build transaction with metadata instruction
-const metadataTx = new Transaction().add(metadataInstruction);
+    // Build and send metadata transaction with retries
+    const metadataTx = new Transaction().add(metadataInstruction);
+    const latest = await connection.getLatestBlockhash("confirmed");
+    metadataTx.recentBlockhash = latest.blockhash;
+    metadataTx.feePayer = payer.publicKey;
 
-// 📦 Get fresh blockhash just before sending
-const latest = await connection.getLatestBlockhash("confirmed");
-metadataTx.recentBlockhash = latest.blockhash;
-metadataTx.feePayer = payer.publicKey;
+    console.log("🚀 Sending metadata transaction with blockhash:", latest.blockhash);
+    const sig = await sendAndConfirmTransaction(
+      connection,
+      metadataTx,
+      [payer],
+      {
+        commitment: "confirmed",
+        maxRetries: 5, // Retry up to 5 times if blockhash expires
+      }
+    );
+    console.log("✅ Metadata confirmed with signature:", sig);
 
-// 🚀 Send metadata transaction
-const sig = await connection.sendTransaction(metadataTx, [payer]);
-console.log("📤 Metadata transaction sent:", sig);
-
-// ⏳ Wait for confirmation using last valid block height
-await connection.confirmTransaction(
-  {
-    signature: sig,
-    blockhash: latest.blockhash,
-    lastValidBlockHeight: latest.lastValidBlockHeight,
-  },
-  "confirmed"
-);
-
-console.log("✅ Metadata confirmed with signature:", sig);
-
-res.json({
-  mint: mint.publicKey.toBase58(),
-  tokenAccount: tokenAccount.address.toBase58(),
-  message: "Token created successfully!",
-});
+    // Step 5: Send success response
+    console.log("🎉 Token creation completed!");
+    res.json({
+      mint: mint.publicKey.toBase58(),
+      tokenAccount: tokenAccount.address.toBase58(),
+      message: "Token created successfully!",
+    });
 
   } catch (err) {
     console.error("❌ Token creation failed:", err);
-    res.status(500).json({ error: "Token creation failed." });
+    res.status(500).json({ error: `Token creation failed: ${err.message}` });
   }
 });
-
 
 // === 🚪 Start Server ===
 const PORT = process.env.PORT || 3000;
