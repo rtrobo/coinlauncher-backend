@@ -110,15 +110,13 @@ app.post('/create-token', async (req, res) => {
     }
     console.log("✅ Payment verified. Proceeding to create token...");
 
-    // Create the mint
-    const mintKeypair = Keypair.generate();
+    // Create the mint (v0.3.x syntax, returns the mint public key directly)
     const mint = await createMint(
       connection,
       payer,
       payer.publicKey, // Mint authority
       options.revokeFreeze ? null : payer.publicKey, // Freeze authority (null if revoked)
-      decimals,
-      mintKeypair
+      decimals
     );
 
     console.log("✅ Mint created:", mint.toBase58());
