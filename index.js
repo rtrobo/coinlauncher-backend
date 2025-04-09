@@ -1,8 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Keypair } = require('@solana/web3.js');
-const { createMint, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { Connection, PublicKey, SystemProgram, LAMPORTS_PER_SOL, Keypair, ComputeBudgetProgram } = require('@solana/web3.js');
+const { createMint, mintTo, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 const app = express();
 app.use(cors());
@@ -14,7 +14,6 @@ const connection = new Connection(SOLANA_RPC, "confirmed");
 const payerJson = process.env.PAYER_JSON;
 if (!payerJson) throw new Error("PAYER_JSON not set in environment variables");
 
-// Parse JSON string into an array and convert to Uint8Array
 let payerSecretKey;
 try {
   payerSecretKey = new Uint8Array(JSON.parse(payerJson));
@@ -25,6 +24,8 @@ const payer = Keypair.fromSecretKey(payerSecretKey);
 
 const BASE_FEE = 0.08;
 const ADDON_FEE = 0.03;
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.post('/calculate-fee', async (req, res) => {
   const { revokeMint, revokeFreeze, revokeMetadata, customMetadata } = req.body;
@@ -38,53 +39,49 @@ app.post('/calculate-fee', async (req, res) => {
 
 app.post('/generate-payment', async (req, res) => {
   const { userWallet, totalFee } = req.body;
-  const userPublicKey = new PublicKey(userWallet);
-  const feeLamports = Math.round(totalFee * LAMPORTS_PER_SOL);
-
-  const instruction = SystemProgram.transfer({
-    fromPubkey: userPublicKey,
-    toPubkey: payer.publicKey,
-    lamports: feeLamports,
-  });
-
-  res.json({
-    instruction: {
-      programId: instruction.programId.toBase58(),
-      keys: instruction.keys.map(k => ({
-        pubkey: k.pubkey.toBase58(),
-        isSigner: k.isSigner,
-        isWritable: k.isWritable,
-      })),
-      data: Array.from(instruction.data),
-    },
-  });
-});
-
-app.post('/verify-payment', async (req, res) => {
-  const { userWallet, expectedFee } = req.body;
-  const userPublicKey = new PublicKey(userWallet);
-  const expectedLamports = Math.round(expectedFee * LAMPORTS_PER_SOL);
-
   try {
-    const signatures = await connection.getSignaturesForAddress(userPublicKey, { limit: 10 });
-    for (const sig of signatures) {
-      const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
-      if (tx && !tx.meta.err) {
-        const transfer = tx.transaction.message.instructions.find(
-          (i) => i.programId.equals(SystemProgram.programId) &&
-                 i.parsed?.type === 'transfer' &&
-                 i.parsed.info.destination === payer.publicKey.toBase58() &&
-                 i.parsed.info.source === userPublicKey.toBase58()
-        );
-        if (transfer && transfer.parsed.info.lamports === expectedLamports) {
-          return res.json({ paid: true });
-        }
-      }
-    }
-    res.json({ paid: false });
+    const userPublicKey = new PublicKey(userWallet);
+    const feeLamports = Math.round(totalFee * LAMPORTS_PER_SOL);
+
+    // Add high priority fee instruction (~0.006 SOL)
+    const priorityFeeInstruction = ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: 20000, // 20,000 micro-lamports × ~300k CU = 0.006 SOL
+    });
+
+    const paymentInstruction = SystemProgram.transfer({
+      fromPubkey: userPublicKey,
+      toPubkey: payer.publicKey,
+      lamports: feeLamports,
+    });
+
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+
+    res.json({
+      instructions: [
+        {
+          programId: priorityFeeInstruction.programId.toBase58(),
+          keys: priorityFeeInstruction.keys.map(k => ({
+            pubkey: k.pubkey.toBase58(),
+            isSigner: k.isSigner,
+            isWritable: k.isWritable,
+          })),
+          data: Array.from(priorityFeeInstruction.data),
+        },
+        {
+          programId: paymentInstruction.programId.toBase58(),
+          keys: paymentInstruction.keys.map(k => ({
+            pubkey: k.pubkey.toBase58(),
+            isSigner: k.isSigner,
+            isWritable: k.isWritable,
+          })),
+          data: Array.from(paymentInstruction.data),
+        },
+      ],
+      blockhash,
+    });
   } catch (error) {
-    console.error("Verification error:", error);
-    res.status(500).json({ error: "Failed to verify payment" });
+    console.error("Generate payment error:", error.message);
+    res.status(500).json({ error: "Failed to generate payment" });
   }
 });
 
@@ -93,44 +90,74 @@ app.post('/create-token', async (req, res) => {
   const { name, symbol, decimals, supply, options, metadataURI, userWallet, paymentSignature, expectedFee } = req.body;
 
   try {
-    console.log("🔍 Verifying payment...");
     const userPublicKey = new PublicKey(userWallet);
     const expectedLamports = Math.round(expectedFee * LAMPORTS_PER_SOL);
-    const tx = await connection.getParsedTransaction(paymentSignature, { maxSupportedTransactionVersion: 0 });
-    if (!tx || tx.meta.err) throw new Error("Transaction not found or failed");
+
+    const payerBalance = await connection.getBalance(payer.publicKey);
+    console.log(`Payer balance: ${payerBalance / LAMPORTS_PER_SOL} SOL`);
+    if (payerBalance < 0.01) throw new Error("Payer wallet has insufficient funds for rent fees (needs ~0.01 SOL)");
+
+    console.log(`🔍 Verifying payment signature: ${paymentSignature}...`);
+    let tx;
+    for (let attempt = 1; attempt <= 30; attempt++) {
+      try {
+        tx = await connection.getParsedTransaction(paymentSignature, { 
+          maxSupportedTransactionVersion: 0,
+          commitment: "confirmed"
+        });
+        if (tx && !tx.meta.err) break;
+        console.log(`⚠️ Attempt ${attempt}: Transaction not found or failed. Retrying in 2s...`);
+        await delay(2000);
+      } catch (error) {
+        console.error(`⚠️ Attempt ${attempt} error:`, error.message);
+        if (error.response?.status === 429) {
+          console.log("Rate limit hit. Waiting longer...");
+          await delay(2000);
+        }
+        await delay(2000);
+      }
+    }
+
+    if (!tx) throw new Error("Transaction not found after 60 seconds");
+    if (tx.meta.err) throw new Error(`Transaction failed: ${JSON.stringify(tx.meta.err)}`);
 
     const transfer = tx.transaction.message.instructions.find(
       (i) => i.programId.equals(SystemProgram.programId) &&
              i.parsed?.type === 'transfer' &&
              i.parsed.info.destination === payer.publicKey.toBase58() &&
-             i.parsed.info.source === userPublicKey.toBase58()
+             i.parsed.info.source === userPublicKey.toBase58() &&
+             i.parsed.info.lamports === expectedLamports
     );
-    if (!transfer || transfer.parsed.info.lamports !== expectedLamports) {
-      throw new Error("Payment not verified");
-    }
-    console.log("✅ Payment verified. Proceeding to create token...");
+    if (!transfer) throw new Error("Payment not verified: no matching transfer");
+    console.log("✅ Payment verified");
 
-    // Create the mint (v0.3.x syntax, returns the mint public key directly)
     const mint = await createMint(
       connection,
       payer,
-      payer.publicKey, // Mint authority
-      options.revokeFreeze ? null : payer.publicKey, // Freeze authority (null if revoked)
+      options.revokeMint ? null : payer.publicKey,
+      options.revokeFreeze ? null : payer.publicKey,
       decimals
     );
-
     console.log("✅ Mint created:", mint.toBase58());
 
-    // Additional token creation logic (e.g., minting supply, setting metadata) can go here
+    const tokenAccount = await mintTo(
+      connection,
+      payer,
+      mint,
+      userPublicKey,
+      payer.publicKey,
+      BigInt(supply) * BigInt(10 ** decimals)
+    );
+    console.log("✅ Supply minted to:", userPublicKey.toBase58());
 
     res.json({ mint: mint.toBase58() });
   } catch (error) {
-    console.error("❌ Token creation error:", error);
-    res.status(500).json({ error: `Token creation failed: ${error.message}` });
+    console.error("❌ Error:", error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Token Creator backend running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
