@@ -30,8 +30,8 @@ app.use(cors({
 app.use(express.json());
 
 // === 🌐 Solana Setup ===
-const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
-const connection = new Connection(SOLANA_RPC);
+const SOLANA_RPC = "https://solana-mainnet.g.alchemy.com/v2/Y5lBPx2CUbYj1mlvV2yt6rzAkk5Hcxj-"; // Updated to Alchemy RPC
+const connection = new Connection(SOLANA_RPC, "confirmed"); // Added commitment for consistency
 const DEV_WALLET = new PublicKey("HLHZPThtJYe7CgzkauGbtr8xVNe9GR8G4LDgmEEbWUgi");
 const BASE_FEE_SOL = 0.08;
 const EXTRA_OPTION_FEE_SOL = 0.03;
